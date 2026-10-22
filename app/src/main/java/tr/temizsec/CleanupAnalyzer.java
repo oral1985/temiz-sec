@@ -11,6 +11,8 @@ public final class CleanupAnalyzer {
         InputStream open(FileRecord file) throws Exception;
         boolean unchanged(FileRecord file) throws Exception;
         Photo photo(FileRecord file) throws Exception;
+        default String cachedDigest(FileRecord file)throws Exception{return null;}
+        default void saveDigest(FileRecord file,String digest)throws Exception{}
     }
     public interface Progress { void update(String phase,int done,int total); }
     public static final class Photo {
@@ -51,8 +53,12 @@ public final class CleanupAnalyzer {
                 progress.update("Kopyalar karşılaştırılıyor",++done,total);
                 try{
                     if(!source.unchanged(file)){result.failedReads++;continue;}
-                    String hash;
-                    try(InputStream stream=source.open(file)){hash=digest(stream,cancelled);}
+                    String hash=source.cachedDigest(file);
+                    if(hash==null){
+                        try(InputStream stream=source.open(file)){hash=digest(stream,cancelled);}
+                        if(!source.unchanged(file)){result.failedReads++;continue;}
+                        source.saveDigest(file,hash);
+                    }
                     if(!source.unchanged(file)){result.failedReads++;continue;}
                     content.computeIfAbsent(file.size+":"+hash,k->new ArrayList<>()).add(file);
                     result.contentChecked++;

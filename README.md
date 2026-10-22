@@ -1,6 +1,6 @@
-# Temiz Seç 3.0.1
+# Temiz Seç 3.1.0
 
-[Android APK indir](https://github.com/oral1985/temiz-sec/releases/download/v3.0.1/Temiz-Sec.apk)
+[Android APK indir](https://github.com/oral1985/temiz-sec/releases/download/v3.1.0/Temiz-Sec.apk)
 
 Telefonu tara düğmesiyle dosya erişimine izin verin veya klasörler ekleyin. Tarama sırasında dosyalar listelenir, aynı boyuttaki adayların tamamı SHA-256 ile okunup karşılaştırılır, ardından fotoğraf benzerliği incelenir. Büyük video ve fotoğraf koleksiyonlarında içerik taraması zaman alır; aşama ve ilerleme gösterilir, tarama durdurulabilir.
 
@@ -26,3 +26,13 @@ gradle testDebugUnitTest assembleDebug lintDebug
 ```
 
 JVM testleri: gerçek içerik karşılaştırması, aynı boyutta farklı içerik, SHA-256 referans özeti, iptal, okunamayan/değişen dosyalar, görsel benzerlik ve renk/örüntü farkları, farklı boyutlu benzer fotoğraflar, yaş/geçicilik ayrımı, kopya başına bir dosya bırakma ve kalıcı koruma seçimleri. CI APK imzasını da doğrular. Fiziksel cihaz testi henüz yapılmamıştır.
+
+## 3.1: Tarama yaşam döngüsü
+
+Uygulamayı açmak, ekrana geri dönmek veya ekranı döndürmek yeni tarama başlatmaz. Yeni tarama kullanıcının düğmesiyle başlar. Tamamlanmış sonuçlar özel SQLite veritabanından yüklenir. Tarama, dataSync türünde bildirimli foreground service içinde çalışır; ekran kapanırken CPU uyanıklığı için süreli kısmi wakelock kullanılır. Bildirim izni reddedilse de foreground service çalışabilir; bildirim görünürlüğü Android ayarlarına bağlıdır.
+
+Her klasörün dosyaları, keşfedilen alt klasörler ve tamamlanma işareti tek veritabanı işlemiyle kaydedilir. İşlem kapanırsa yalnızca tamamlanmamış klasör yeniden listelenir. Tamamlanan dosya SHA-256 özetleri ve görsel imzalar kimlik, boyut ve son değişiklik zamanı ile saklanır. Devam ederken bu değerler değişmemişse dosya içeriği tekrar okunmaz. Yarım kalan tek dosyanın okuması yeniden başlayabilir. Sonuç kategorileri bitişte atomik olarak kaydedilir.
+
+Hizmet START_NOT_STICKY kullanır: işletim sistemi süreci kapattığında otomatik olarak baştan tarama yapmaz. Uygulama kaydedilmiş durumu gösterir ve kullanıcı Devam et ile sürdürür. Üreticinin güç yönetimi hizmeti yine durdurabilir; kayıt noktaları bunun için tutulur. Servis durumu ve bildirim ilerlemesi yaklaşık saniyede bir güncellenir. Kalıcı veriler yalnızca uygulamanın özel alanındadır.
+
+Testler: ekranın yeniden oluşturulmasında otomatik servis başlatılmaması, veritabanının yeniden açılmasında klasör ve imza kayıtlarının korunması, bitmiş sonuçların geri yüklenmesi ve tamamlanan özetlerin yeniden okunmadan kullanılması. Fiziksel cihazda üretici pil yönetimi ayrıca denenmelidir.

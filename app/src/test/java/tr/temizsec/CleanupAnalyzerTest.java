@@ -74,4 +74,18 @@ public class CleanupAnalyzerTest {
         CleanupAnalyzer.Result r=CleanupAnalyzer.analyze(Arrays.asList(a,b),photos,()->false,(s,d,t)->{},1000);
         assertTrue(r.duplicates.isEmpty());assertEquals(1,r.similar.size());assertEquals(2,r.similar.get(0).size());
     }
+    @Test public void completedDigestsAreReusedWhenAnalysisIsResumed(){
+        Map<String,String> saved=new HashMap<>();int[] reads={0};
+        CleanupAnalyzer.Source checkpointed=new CleanupAnalyzer.Source(){
+            public InputStream open(FileRecord file){reads[0]++;return new ByteArrayInputStream(new byte[]{1,2,3});}
+            public boolean unchanged(FileRecord file){return true;}
+            public CleanupAnalyzer.Photo photo(FileRecord file){return null;}
+            public String cachedDigest(FileRecord file){return saved.get(file.id);}
+            public void saveDigest(FileRecord file,String digest){saved.put(file.id,digest);}
+        };
+        List<FileRecord> files=Arrays.asList(f("a","a",3,1),f("b","b",3,1));
+        CleanupAnalyzer.analyze(files,checkpointed,()->false,(s,d,t)->{},1000);assertEquals(2,reads[0]);
+        CleanupAnalyzer.Result resumed=CleanupAnalyzer.analyze(files,checkpointed,()->false,(s,d,t)->{},1000);
+        assertEquals(2,reads[0]);assertEquals(1,resumed.duplicates.size());
+    }
 }

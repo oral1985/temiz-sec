@@ -26,7 +26,14 @@ public class MainActivity extends Activity {
     private static final int INK=0xff163247, MUTED=0xff667D8D, TEAL=0xff087F75, BG=0xffF4F7FA;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private final ExecutorService images=Executors.newFixedThreadPool(2);
-    private final AtomicBoolean cancelled=new AtomicBoolean();
+    private ScanRepository repository;
+    private final Handler scanHandler=new Handler(Looper.getMainLooper());
+    private long loadedJob,requestStarted;
+    private boolean loadPending,scanRequested,resumeRequested;
+    private TextView restartLink;
+    private final Runnable scanMonitor=new Runnable(){
+        public void run(){refreshScan();scanHandler.postDelayed(this,1000);}
+    };
     private final List<FileRecord> files=new ArrayList<>();
     private List<List<FileRecord>> groups=new ArrayList<>();
     private final List<Row> rows=new ArrayList<>();
@@ -38,7 +45,6 @@ public class MainActivity extends Activity {
     private Button phoneButton, folderButton, foldersScan, autoButton, clearButton, deleteButton;
     private Spinner matchMode;
     private CleanupAnalyzer.Result analysis=new CleanupAnalyzer.Result();
-    private long analysisProgressAt;
     private ProgressBar progress;
     private ListView results;
     private ResultsAdapter adapter;
@@ -57,6 +63,7 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs=getSharedPreferences("settings",MODE_PRIVATE);
+        repository=ScanRepository.get(this);
         protectedIds=new HashSet<>(prefs.getStringSet("protected",Collections.emptySet()));
         trees=new LinkedHashSet<>(prefs.getStringSet("trees",Collections.emptySet()));
         String old=prefs.getString("tree",null);
@@ -64,8 +71,8 @@ public class MainActivity extends Activity {
         lastScope=prefs.getString("scope","folders");
         buildUi();
         updateScope();
-        if("phone".equals(lastScope)&&hasStorageAccess())startPhoneScan();
-        else if(!trees.isEmpty())startFolderScan();
+        // Opening or rotating the screen never starts a new scan.
+        refreshScan();
     }
 
     private void buildUi() {
@@ -84,10 +91,15 @@ public class MainActivity extends Activity {
         phoneButton=button("Telefonu tara",actions,TEAL,Color.WHITE);
         folderButton=button("Klasör ekle",actions,0xffE5F2EF,TEAL);
         phoneButton.setOnClickListener(v->{
-            if(busy){if(!deleting){cancelled.set(true);summary.setText("Tarama durduruluyor…");}return;}
-            requestPhoneScan();
+            if(busy){if(!deleting){ScanService.pause(this);summary.setText("Tarama duraklatılıyor…");}return;}
+            if(repository.state().pending())resumeScan();else requestPhoneScan();
         });
         folderButton.setOnClickListener(v->chooseFolder());
+        restartLink=text("Yarım taramayı bırakıp yeni tarama başlat",12,TEAL);
+        restartLink.setPadding(dp(4),dp(8),dp(4),dp(8));restartLink.setVisibility(View.GONE);scope.addView(restartLink);
+        restartLink.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Baştan taransın mı?")
+            .setMessage("Yarım taramanın listesi yenilenir. Tamamlanan dosya karşılaştırmaları yeniden kullanılabilir. “Silme” işaretlerin korunur.")
+            .setNegativeButton("Vazgeç",null).setPositiveButton("Yeni tarama",(d,w)->requestPhoneScan()).show());
         folderActions=row();scope.addView(folderActions);
         foldersLink=text("",12,TEAL);foldersLink.setPadding(dp(4),dp(8),dp(4),dp(8));
         folderActions.addView(foldersLink,new LinearLayout.LayoutParams(0,-2,1));
@@ -194,118 +206,68 @@ public class MainActivity extends Activity {
             }).show();
     }
 
-    private List<File> storageRoots() {
-        LinkedHashMap<String,File> roots=new LinkedHashMap<>();
-        File primary=Environment.getExternalStorageDirectory();
-        roots.put(primary.getAbsolutePath(),primary);
-        if(Build.VERSION.SDK_INT>=30){
-            StorageManager storage=(StorageManager)getSystemService(STORAGE_SERVICE);
-            if(storage!=null)for(StorageVolume volume:storage.getStorageVolumes()){
-                File dir=volume.getDirectory();
-                if(dir!=null&&(Environment.MEDIA_MOUNTED.equals(volume.getState())||Environment.MEDIA_MOUNTED_READ_ONLY.equals(volume.getState())))
-                    roots.put(dir.getAbsolutePath(),dir);
-            }
-        }
-        return new ArrayList<>(roots.values());
-    }
     private void startPhoneScan(){
         if(busy)return;if(!hasStorageAccess()){requestPhoneScan();return;}
-        lastScope="phone";prefs.edit().putString("scope",lastScope).apply();
-        beginScan(true);
+        if(resumeRequested){resumeRequested=false;startServiceScan(true,true);return;}
+        lastScope="phone";prefs.edit().putString("scope",lastScope).apply();startServiceScan(false,true);
     }
     private void startFolderScan(){
         if(busy)return;if(trees.isEmpty()){chooseFolder();return;}
-        lastScope="folders";prefs.edit().putString("scope",lastScope).apply();
-        beginScan(false);
+        lastScope="folders";prefs.edit().putString("scope",lastScope).apply();startServiceScan(false,false);
     }
-    private void beginScan(boolean phone) {
-        cancelled.set(false);selected.clear();files.clear();scannedCount=emptyCount=unreadableCount=0;
-        analysis=new CleanupAnalyzer.Result();analysisProgressAt=0;updateCategories();
-        setBusy(true,false);rebuild();updateScope();summary.setText("Dosyalar sayılıyor…");
-        final List<String> folderUris=new ArrayList<>(trees);
-        final List<File> roots=storageRoots();
-        worker.execute(()->{
-            List<FileRecord> found=new ArrayList<>();Set<String> seen=new HashSet<>();
-            if(phone)scanStorage(roots,found,seen);
-            else for(String uri:folderUris){if(cancelled.get())break;scanTree(Uri.parse(uri),found,seen);}
-            CleanupAnalyzer.Result analysed=CleanupAnalyzer.analyze(found,new CleanupAnalyzer.Source(){
-                public InputStream open(FileRecord file)throws Exception{return stream(file);}
-                public boolean unchanged(FileRecord file)throws Exception{return MainActivity.this.unchanged(file);}
-                public CleanupAnalyzer.Photo photo(FileRecord file){return photoSignature(file);}
-            },()->cancelled.get()||Thread.currentThread().isInterrupted(),this::reportAnalysisProgress,System.currentTimeMillis());
-            runOnUiThread(()->{
-                if(isDestroyed())return;
-                analysis=analysed;files.addAll(found);
-                for(FileRecord e:files)if(protectedIds.contains(e.uri))protectedIds.add(e.id);
-                saveProtected();setBusy(false,false);updateCategories();rebuild();
-            });
-        });
+    private void resumeScan(){
+        boolean phone="phone".equals(repository.state().mode);
+        if(phone&&!hasStorageAccess()){resumeRequested=true;requestPhoneScan();return;}
+        startServiceScan(true,phone);
     }
-    private void scanStorage(List<File> roots,List<FileRecord> found,Set<String> seen) {
-        ArrayDeque<File> queue=new ArrayDeque<>(roots);Set<String> directories=new HashSet<>();
-        while(!queue.isEmpty()&&!cancelled.get()&&!Thread.currentThread().isInterrupted()){
-            File dir=queue.remove();
-            try{
-                if(!directories.add(dir.getCanonicalPath()))continue;
-                File[] children=dir.listFiles();
-                if(children==null){unreadableCount++;continue;}
-                for(File file:children){
-                    if(cancelled.get())break;
-                    if(file.isDirectory()){
-                        if("Android".equals(dir.getName())&&("data".equals(file.getName())||"obb".equals(file.getName()))){unreadableCount++;continue;}
-                        queue.add(file);
-                    }else if(file.isFile()){
-                        scannedCount++;
-                        long size=file.length();
-                        if(size==0)emptyCount++;
-                        String canonical=file.getCanonicalPath(),id="file:"+canonical;
-                        if(seen.add(id))found.add(new FileRecord(id,Uri.fromFile(file).toString(),canonical,file.getName(),canonical,mime(file.getName()),size,file.lastModified(),file.canWrite()&&dir.canWrite()));
-                        reportProgress();
-                    }
-                }
-            }catch(Exception e){unreadableCount++;}
+    private void startServiceScan(boolean resume,boolean phone){
+        if(busy||ScanService.active)return;
+        if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},30);
+        files.clear();analysis=new CleanupAnalyzer.Result();selected.clear();loadedJob=0;updateCategories();
+        scanRequested=true;requestStarted=SystemClock.elapsedRealtime();setBusy(true,false);rebuild();
+        restartLink.setVisibility(View.GONE);summary.setText(resume?"Kaydedilen yerden devam ediliyor…":"Tarama başlatılıyor…");
+        try{ScanService.start(this,resume,phone);}
+        catch(RuntimeException e){scanRequested=false;setBusy(false,false);summary.setText("Arka plan taraması başlatılamadı. Uygulama açıkken yeniden dene.");}
+    }
+    @Override protected void onStart(){super.onStart();scanHandler.post(scanMonitor);}
+    @Override protected void onStop(){scanHandler.removeCallbacks(scanMonitor);super.onStop();}
+    private void refreshScan(){
+        if(repository==null||adapter==null||deleting)return;
+        ScanRepository.State state=repository.state();
+        boolean active=ScanService.active;
+        if(scanRequested&&!active&&SystemClock.elapsedRealtime()-requestStarted<5000)return;
+        if(active){
+            scanRequested=false;if(!busy)setBusy(true,false);
+            phoneButton.setText("Duraklat");restartLink.setVisibility(View.GONE);
+            summary.setText(state.phase+(state.total>0?" · "+state.done+" / "+state.total:state.done>0?" · "+state.done+" dosya":""));
+            if(state.total>0){progress.setIndeterminate(false);progress.setMax((int)state.total);progress.setProgress((int)state.done);}
+            else progress.setIndeterminate(true);
+            return;
         }
-    }
-    private void scanTree(Uri tree,List<FileRecord> found,Set<String> seen) {
-        ArrayDeque<String[]> queue=new ArrayDeque<>();Set<String> visited=new HashSet<>();
-        try{queue.add(new String[]{DocumentsContract.getTreeDocumentId(tree),treeLabel(tree)});}
-        catch(Exception e){unreadableCount++;return;}
-        while(!queue.isEmpty()&&!cancelled.get()&&!Thread.currentThread().isInterrupted()){
-            String[] dir=queue.remove();if(!visited.add(dir[0]))continue;
-            String[] projection={DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE,DocumentsContract.Document.COLUMN_SIZE,DocumentsContract.Document.COLUMN_FLAGS,DocumentsContract.Document.COLUMN_LAST_MODIFIED};
-            try(Cursor cursor=getContentResolver().query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,dir[0]),projection,null,null,null)){
-                if(cursor==null){unreadableCount++;continue;}
-                while(cursor.moveToNext()&&!cancelled.get()){
-                    String id=cursor.getString(0),name=cursor.getString(1),mime=cursor.getString(2);
-                    if(name==null)name="İsimsiz";
-                    String path=dir[1]+"/"+name;
-                    if(DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)){queue.add(new String[]{id,path});continue;}
-                    scannedCount++;
-                    if(cursor.isNull(3)){unreadableCount++;continue;}
-                    long size=cursor.getLong(3);if(size<0){unreadableCount++;continue;}if(size==0)emptyCount++;
-                    Uri uri=DocumentsContract.buildDocumentUriUsingTree(tree,id);
-                    String identity=documentIdentity(tree,id,uri);
-                    if(seen.add(identity))found.add(new FileRecord(identity,uri.toString(),null,name,path,mime,size,cursor.getLong(5),(cursor.getLong(4)&DocumentsContract.Document.FLAG_SUPPORTS_DELETE)!=0));
-                    reportProgress();
-                }
-            }catch(Exception e){unreadableCount++;}
-        }
-    }
-    private String documentIdentity(Uri tree,String documentId,Uri uri){
-        if("com.android.externalstorage.documents".equals(tree.getAuthority())){
-            int colon=documentId.indexOf(':');
-            if(colon>=0){
-                String volume=documentId.substring(0,colon),relative=documentId.substring(colon+1);
-                File base="primary".equalsIgnoreCase(volume)?Environment.getExternalStorageDirectory():new File("/storage",volume);
-                try{return "file:"+new File(base,relative).getCanonicalPath();}catch(IOException ignored){}
+        scanRequested=false;if(busy)setBusy(false,false);
+        restartLink.setVisibility(state.pending()?View.VISIBLE:View.GONE);
+        if(state.pending()){
+            phoneButton.setText("Devam et");
+            summary.setText("Tarama kaydedildi. Devam et düğmesiyle kaldığın yerden sürdürebilirsin.\n"
+                +state.phase+(state.total>0?" · "+state.done+" / "+state.total:state.done>0?" · "+state.done+" dosya":""));
+        }else{
+            phoneButton.setText(state.complete()?"Yeniden tara":"Telefonu tara");
+            if(state.complete()&&state.job!=loadedJob&&!loadPending){
+                loadPending=true;long job=state.job;
+                worker.execute(()->{
+                    ScanRepository.Snapshot saved=repository.snapshot();
+                    runOnUiThread(()->{
+                        loadPending=false;
+                        if(isDestroyed()||ScanService.active||scanRequested||repository.state().job!=job)return;
+                        files.clear();files.addAll(saved.files);analysis=saved.result;loadedJob=job;
+                        scannedCount=files.size();unreadableCount=state.skipped;
+                        for(FileRecord file:files)if(protectedIds.contains(file.uri))protectedIds.add(file.id);
+                        saveProtected();updateCategories();rebuild();
+                    });
+                });
             }
         }
-        return uri.toString();
-    }
-    private void reportProgress(){
-        if(scannedCount%150!=0)return;
-        long count=scannedCount;
-        runOnUiThread(()->{if(!isDestroyed()&&busy&&!deleting)summary.setText(count+" dosya tarandı…");});
     }
 
     private boolean keepsCopy(){return matchMode.getSelectedItemPosition()<2;}
@@ -322,12 +284,6 @@ public class MainActivity extends Activity {
         int position=Math.max(0,matchMode.getSelectedItemPosition());
         matchMode.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,categoryLabels()));
         matchMode.setSelection(position);
-    }
-    private void reportAnalysisProgress(String phase,int done,int total){
-        long now=SystemClock.elapsedRealtime();
-        if(now-analysisProgressAt<250&&done!=total)return;
-        analysisProgressAt=now;
-        runOnUiThread(()->{if(!isDestroyed()&&busy&&!deleting)summary.setText(phase+"… "+done+" / "+total);});
     }
     private void rebuild(){
         if(adapter==null)return;
@@ -357,7 +313,7 @@ public class MainActivity extends Activity {
         if(!busy){
             int matches=0,photos=0,videos=0;for(List<FileRecord> group:groups)matches+=group.size();
             for(FileRecord file:files){if(MatchRules.isPhoto(file))photos++;else if(isVideo(file))videos++;}
-            summary.setText((cancelled.get()?"Tarama durduruldu · ":"")+files.size()+" dosya · "+photos+" fotoğraf · "+videos+" video\n"
+            summary.setText(files.size()+" dosya · "+photos+" fotoğraf · "+videos+" video\n"
                 +matches+" sonuç"+(category<2?" / "+groups.size()+" grup":"")
                 +(unreadableCount>0?" · "+unreadableCount+" kısıtlı/okunamayan alan":"")
                 +(analysis.failedReads>0?"\n"+analysis.failedReads+" dosya içeriği okunamadı veya değişti.":""));
@@ -383,7 +339,7 @@ public class MainActivity extends Activity {
     }
     private void setBusy(boolean value,boolean isDeleting){
         busy=value;deleting=isDeleting;
-        phoneButton.setText(value&&!isDeleting?"Taramayı durdur":"Telefonu tara");
+        phoneButton.setText(value&&!isDeleting?"Duraklat":"Telefonu tara");
         phoneButton.setEnabled(!isDeleting);folderButton.setEnabled(!value);foldersLink.setEnabled(!value);
         foldersScan.setEnabled(!value&&!trees.isEmpty());matchMode.setEnabled(!value);
         autoButton.setEnabled(!value);clearButton.setEnabled(!value);progress.setVisibility(value?View.VISIBLE:View.GONE);
@@ -427,7 +383,7 @@ public class MainActivity extends Activity {
                     final int skipped=changed;
                     runOnUiThread(()->{
                         if(isDestroyed())return;
-                        files.removeIf(e->deleted.contains(e.id));removeAnalysedFiles(deleted);protectedIds.removeAll(deleted);saveProtected();
+                        repository.remove(deleted);files.removeIf(e->deleted.contains(e.id));removeAnalysedFiles(deleted);protectedIds.removeAll(deleted);saveProtected();
                         setBusy(false,false);updateCategories();rebuild();
                         summary.setText(deleted.size()+" dosya silindi · "+(targets.size()-deleted.size())+" silinmedi"
                             +(skipped>0?"\n"+skipped+" dosya taramadan sonra değiştiği için korunarak atlandı.":""));
@@ -435,17 +391,7 @@ public class MainActivity extends Activity {
                 });
             }).show();
     }
-    private boolean unchanged(FileRecord e) throws Exception {
-        if(e.filePath!=null){
-            File file=new File(e.filePath);
-            return file.isFile()&&file.length()==e.size&&file.lastModified()==e.modified;
-        }
-        String[] projection={DocumentsContract.Document.COLUMN_SIZE,DocumentsContract.Document.COLUMN_LAST_MODIFIED};
-        try(Cursor c=getContentResolver().query(Uri.parse(e.uri),projection,null,null,null)){
-            return c!=null&&c.moveToFirst()&&!c.isNull(0)&&c.getLong(0)==e.size
-                &&(e.modified==0||c.getLong(1)==e.modified);
-        }
-    }
+    private boolean unchanged(FileRecord file)throws Exception{return ScanService.isUnchanged(this,file);}
 
     private final class ResultsAdapter extends BaseAdapter {
         public int getCount(){return rows.size();}
@@ -516,47 +462,7 @@ public class MainActivity extends Activity {
             }
         });
     }
-    private InputStream stream(FileRecord file)throws IOException{
-        return file.filePath!=null?new FileInputStream(file.filePath):getContentResolver().openInputStream(Uri.parse(file.uri));
-    }
-    private Bitmap decode(FileRecord file,int target){
-        try{
-            BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;
-            try(InputStream in=stream(file)){BitmapFactory.decodeStream(in,null,options);}
-            int sample=1;while(options.outWidth/sample>target*2||options.outHeight/sample>target*2)sample*=2;
-            options.inJustDecodeBounds=false;options.inSampleSize=sample;
-            Bitmap bitmap;
-            try(InputStream in=stream(file)){bitmap=BitmapFactory.decodeStream(in,null,options);}
-            if(bitmap==null)return null;
-            int orientation=1;
-            try(InputStream in=stream(file)){orientation=new android.media.ExifInterface(in).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,1);}
-            catch(Exception ignored){}
-            Matrix transform=new Matrix();
-            switch(orientation){
-                case 2:transform.setScale(-1,1);break;
-                case 3:transform.setRotate(180);break;
-                case 4:transform.setScale(1,-1);break;
-                case 5:transform.setRotate(90);transform.postScale(-1,1);break;
-                case 6:transform.setRotate(90);break;
-                case 7:transform.setRotate(270);transform.postScale(-1,1);break;
-                case 8:transform.setRotate(270);break;
-                default:return bitmap;
-            }
-            Bitmap oriented=Bitmap.createBitmap(bitmap,0,0,bitmap.getWidth(),bitmap.getHeight(),transform,true);
-            if(oriented!=bitmap)bitmap.recycle();
-            return oriented;
-        }catch(Exception|OutOfMemoryError e){return null;}
-    }
-    private CleanupAnalyzer.Photo photoSignature(FileRecord file){
-        Bitmap bitmap=decode(file,72);
-        if(bitmap==null)return null;
-        Bitmap nine=Bitmap.createScaledBitmap(bitmap,9,8,true),eight=Bitmap.createScaledBitmap(bitmap,8,8,true);
-        int[] grid9=new int[72],grid8=new int[64];
-        nine.getPixels(grid9,0,9,0,0,9,8);eight.getPixels(grid8,0,8,0,0,8,8);
-        CleanupAnalyzer.Photo signature=CleanupAnalyzer.fingerprint(grid9,grid8,(double)bitmap.getWidth()/bitmap.getHeight());
-        if(nine!=bitmap)nine.recycle();if(eight!=bitmap&&eight!=nine)eight.recycle();bitmap.recycle();
-        return signature;
-    }
+    private Bitmap decode(FileRecord file,int target){return ScanImages.decode(this,file,target);}
     private boolean isVideo(FileRecord file){
         if(file.mime!=null&&file.mime.startsWith("video/"))return true;
         return file.name.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|mkv|mov|avi|webm|3gp|m4v)$");
@@ -608,5 +514,5 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-2,1);p.setMargins(dp(3),dp(4),dp(3),dp(4));parent.addView(b,p);return b;
     }
     private void toast(String value){Toast.makeText(this,value,Toast.LENGTH_LONG).show();}
-    @Override protected void onDestroy(){cancelled.set(true);worker.shutdownNow();images.shutdownNow();super.onDestroy();}
+    @Override protected void onDestroy(){scanHandler.removeCallbacks(scanMonitor);worker.shutdownNow();images.shutdownNow();super.onDestroy();}
 }
