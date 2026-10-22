@@ -22,8 +22,10 @@ jobs:
       - name: Sonraki sürümlerde aynı kurulum imzasını koru
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: temiz-sec-debug-signing-v2
+          path: .signing/debug.keystore
+          key: temiz-sec-debug-signing-explicit-v1
+      - name: Kurulum anahtarını hazırla
+        run: bash scripts/prepare-debug-key.sh
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
@@ -58,8 +60,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view v3.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload v3.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+          if gh release view v3.0.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v3.0.1 Temiz-Sec.apk Temiz-Sec.apk.sha256 --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create v3.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Temiz Seç 3.0" --notes "İçerik karşılaştırmasıyla birebir kopya fotoğraf, video ve dosyalar. Boyuttan bağımsız görsel benzerliğiyle fotoğraf adayları. Eski, geçici/boş ve büyük dosyalar ayrı kategorilerde. Korunan dosyalar toplu seçimde atlanır, otomatik silme yoktur. Android özel uygulama klasörleri kapsam dışı. 2.0 ile aynı imza önbelleği kullanılır. Benzerlik ve gereksizlik sonuçları kontrol gerektiren adaylardır. Fiziksel cihaz testi henüz yapılmadı."
+            gh release create v3.0.1 Temiz-Sec.apk Temiz-Sec.apk.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Temiz Seç 3.0.1" --notes "İçerik karşılaştırmasıyla birebir kopya fotoğraf, video ve dosyalar. Boyuttan bağımsız görsel benzerliğiyle fotoğraf adayları. Eski, geçici/boş ve büyük dosyalar ayrı kategorilerde. Korunan dosyalar toplu seçimde atlanır, otomatik silme yoktur. Android özel uygulama klasörleri kapsam dışı. 2.0 imza önbelleği boş olduğu için eski sürümü kaldırmak gerekebilir; bu işlem eski işaretleri sıfırlar. Yeni anahtar açıkça yapılandırılıp önbelleğe alınır. Benzerlik ve gereksizlik sonuçları kontrol gerektiren adaylardır. Fiziksel cihaz testi henüz yapılmadı."
           fi

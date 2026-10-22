@@ -1,6 +1,6 @@
-# Temiz Seç 3.0
+# Temiz Seç 3.0.1
 
-[Android APK indir](https://github.com/oral1985/temiz-sec/releases/download/v3.0.0/Temiz-Sec.apk)
+[Android APK indir](https://github.com/oral1985/temiz-sec/releases/download/v3.0.1/Temiz-Sec.apk)
 
 Telefonu tara düğmesiyle dosya erişimine izin verin veya klasörler ekleyin. Tarama sırasında dosyalar listelenir, aynı boyuttaki adayların tamamı SHA-256 ile okunup karşılaştırılır, ardından fotoğraf benzerliği incelenir. Büyük video ve fotoğraf koleksiyonlarında içerik taraması zaman alır; aşama ve ilerleme gösterilir, tarama durdurulabilir.
 
@@ -16,11 +16,12 @@ Kopya ve benzer gruplarda bir dosya bırakılabilir, diğerleri toplu seçilip t
 
 Telefon taraması ortak depolamayı ve erişilebilen SD kartları kapsar. Android/data, Android/obb ve özel uygulama alanları kapsam dışıdır. Uygulama başka uygulamaların özel önbelleğini veya RAM'ini temizleyemez. Birden fazla seçili klasör birlikte taranabilir, iç içe seçimler tekilleştirilir. İçeriği okunamayan/değişen dosyalar eşleştirilmez.
 
-2.0 sürümünün debug imza önbelleği korunur. CI önbelleği bulunursa 2.0 üzerine güncelleme olarak kurulabilir ve kayıtlar korunur. Kalıcı üretim imza anahtarı henüz yapılandırılmamıştır. 1.0 sürümünü kaldırmak gerekirse kayıtları sıfırlanır.
+Önceki sürümde debug anahtarı standart olduğu varsayılan konuma yazılmadığı için önbelleğe alınmamıştı. 3.0.1, açıkça .signing/debug.keystore konumunu kullanır ve bu dosyayı Actions önbelleğinde saklar. 2.0 üzerine kurulumda paket çakışması olursa eski sürüm kaldırılmalıdır; bu işlem eski kayıtları siler. Önbellek GitHub tarafından silinirse anahtar yeniden oluşur. Kalıcı üretim imza anahtarı henüz yapılandırılmamıştır. Özel anahtar kaynak kod deposuna eklenmez.
 
 ## Denetimler
 
 ```sh
+bash scripts/prepare-debug-key.sh
 gradle testDebugUnitTest assembleDebug lintDebug
 ```
 
