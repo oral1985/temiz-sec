@@ -1,34 +1,27 @@
-# Temiz Seç 2.0
+# Temiz Seç 3.0
 
-Android 8 ve üzeri için Türkçe dosya temizleme uygulaması.
+[Android APK indir](https://github.com/oral1985/temiz-sec/releases/download/v3.0.0/Temiz-Sec.apk)
 
-[APK indir](https://github.com/oral1985/temiz-sec/releases/download/v2.0.0/Temiz-Sec.apk)
+Telefonu tara düğmesiyle dosya erişimine izin verin veya klasörler ekleyin. Tarama sırasında dosyalar listelenir, aynı boyuttaki adayların tamamı SHA-256 ile okunup karşılaştırılır, ardından fotoğraf benzerliği incelenir. Büyük video ve fotoğraf koleksiyonlarında içerik taraması zaman alır; aşama ve ilerleme gösterilir, tarama durdurulabilir.
 
-## Tarama
+## Kategoriler
 
-- **Telefonu tara:** Android 11 ve üzerinde “Tüm dosyalara erişim” ekranını açar. İzin verilince ortak depolamanın üst klasörü, alt klasörleri ve erişilebilen SD kartlar taranır. Android 8–10 için depolama izni istenir.
-- **Klasör ekle:** Birden fazla klasör kaydedilebilir. “Klasörleri tara” hepsini birlikte tarar. Aynı dosyaya çıkan iç içe klasörler tekilleştirilir. Klasör listesinde seçimler kaldırılabilir.
-- Android/data, Android/obb ve uygulamaların özel alanlarına erişim garanti edilmez. Okunamayan alanların sayısı gösterilir.
-- Tarama durdurulabilir. Boş dosyalar ve bilinmeyen boyutlar eşleştirilmez.
+- **Birebir kopyalar:** İsimden bağımsız, tam içeriği aynı fotoğraf, video ve diğer dosyalar. Aynı boyutta farklı içerikler birlikte gösterilmez.
+- **Benzer fotoğraflar:** Boyutları farklı olsa bile görüntü benzerliği olan fotoğraflar. dHash, ortalama parlaklık örüntüsü, renk ve en/boy oranı karşılaştırılır. Az ayrıntılı düz görüntüler yanlış eşleşmemeleri için atlanır. Her grup bir temsilciyle karşılaştırılır; benzerlik zincirleri birleştirilmez. Bu yöntem bir tahmindir, her benzer görseli bulma garantisi yoktur. Videolarda görsel benzerlik uygulanmaz.
+- **Eski dosyalar:** Son değişikliği 180 günden eski dosyalar. Gereksiz oldukları varsayılmaz.
+- **Geçici / boş dosyalar:** Son 48 saatte değişmemiş boş ve .tmp/.temp/.part/.crdownload/.download dosyaları; cache/temp klasörlerindeki eski dosya adayları. .nomedia gibi kontrol dosyaları hariç tutulur. Dosyanın yaşı ve adı gereksiz olduğunu garanti etmez.
+- **Büyük dosyalar:** En az 100 MB olan dosyalar.
 
-## Eşleştirme ve seçim
+Kopya ve benzer gruplarda bir dosya bırakılabilir, diğerleri toplu seçilip tek tek değiştirilebilir. Diğer kategorilerde kullanıcı tek tek seçim yapar. “Silme · hatırla” işaretleri cihazda saklanır, toplu seçilmez; ancak elle seçilip silme onayında ayrıca belirtilirse silinebilir. Hiçbir dosya otomatik silinmez. Silme kalıcıdır.
 
-Varsayılan olarak isimden bağımsız **tam bayt boyutu aynı** dosyalar gruplanır. Aynı isim, farklı isim ve yaklaşık aynı 1 KB aralığı filtreleri bulunur. Aynı boyut aynı içerik anlamına gelmez; yaklaşık eşleşmeler özellikle kontrol edilmelidir.
+Telefon taraması ortak depolamayı ve erişilebilen SD kartları kapsar. Android/data, Android/obb ve özel uygulama alanları kapsam dışıdır. Uygulama başka uygulamaların özel önbelleğini veya RAM'ini temizleyemez. Birden fazla seçili klasör birlikte taranabilir, iç içe seçimler tekilleştirilir. İçeriği okunamayan/değişen dosyalar eşleştirilmez.
 
-Fotoğraflar sonuç listesinde küçük önizlemelerle gösterilir ve uygulama içinde büyütülür. Diğer dosyalar uygun görüntüleyiciyle açılır.
+2.0 sürümünün debug imza önbelleği korunur. CI önbelleği bulunursa 2.0 üzerine güncelleme olarak kurulabilir ve kayıtlar korunur. Kalıcı üretim imza anahtarı henüz yapılandırılmamıştır. 1.0 sürümünü kaldırmak gerekirse kayıtları sıfırlanır.
 
-“Birini bırak, kalanları seç” her grupta en az bir dosya bırakır. “Silme · hatırla” işaretleri kalıcıdır, toplu seçimde atlanır ve ancak elle seçilirse silinebilir. Silmeden önce yollar ve elle seçilen korumalı dosyalar gösterilir. Taramadan sonra değişen dosyalar silme sırasında atlanır.
-
-Silme kalıcıdır. Çöp kutusu ve internet izni yoktur.
-
-## Kurulum ve imza
-
-İlk sürümün CI imza anahtarı saklanmamıştı. 2.0 sürümü 1.0 üzerine yüklenmezse eski sürümü kaldırmak gerekir; bu işlem 1.0 kayıtlarını siler. 2.0 ile debug imza anahtarı Actions önbelleğinde saklanır. Önbellek kaybolursa aynı risk yeniden oluşur. Üretim sürümleri için kalıcı, özel bir imza anahtarı yönetimi gerekir.
-
-## Doğrulama
-
-CI, eşleştirme ve koruma kuralları için JVM testleri, APK derlemesi, Android lint ve APK imza doğrulaması çalıştırır. Fiziksel Android cihazdaki izinler ve farklı üreticilerin SD kart sağlayıcıları cihazda ayrıca kontrol edilmelidir.
+## Denetimler
 
 ```sh
 gradle testDebugUnitTest assembleDebug lintDebug
 ```
+
+JVM testleri: gerçek içerik karşılaştırması, aynı boyutta farklı içerik, SHA-256 referans özeti, iptal, okunamayan/değişen dosyalar, görsel benzerlik ve renk/örüntü farkları, farklı boyutlu benzer fotoğraflar, yaş/geçicilik ayrımı, kopya başına bir dosya bırakma ve kalıcı koruma seçimleri. CI APK imzasını da doğrular. Fiziksel cihaz testi henüz yapılmamıştır.

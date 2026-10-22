@@ -37,7 +37,8 @@ public class MainActivity extends Activity {
     private LinearLayout folderActions;
     private Button phoneButton, folderButton, foldersScan, autoButton, clearButton, deleteButton;
     private Spinner matchMode;
-    private CheckBox photosOnly;
+    private CleanupAnalyzer.Result analysis=new CleanupAnalyzer.Result();
+    private long analysisProgressAt;
     private ProgressBar progress;
     private ListView results;
     private ResultsAdapter adapter;
@@ -75,7 +76,7 @@ public class MainActivity extends Activity {
             return insets;
         });
         TextView title=text("Temiz Seç",27,INK);title.setTypeface(null,Typeface.BOLD);root.addView(title);
-        root.addView(text("Dosyalarını gör. Bir kopyasını bırak.",13,MUTED));
+        root.addView(text("Kopyaları bul. Temizlenecek dosyaları seç.",13,MUTED));
         LinearLayout scope=column();scope.setPadding(dp(12),dp(8),dp(12),dp(8));scope.setBackground(shape(Color.WHITE,12));
         add(root,scope,8);
         scopeLabel=text("",13,INK);scope.addView(scopeLabel);
@@ -95,22 +96,14 @@ public class MainActivity extends Activity {
         foldersScan.setOnClickListener(v->startFolderScan());
 
         matchMode=new Spinner(this);
-        String[] filters={"Aynı boyut · tüm isimler","Aynı isim + aynı boyut","Farklı isim + aynı boyut","Aynı KB aralığı · yaklaşık"};
+        String[] filters=categoryLabels();
         matchMode.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,filters));
         matchMode.setBackground(shape(Color.WHITE,10));
         add(root,matchMode,8);
-        LinearLayout options=row();
-        photosOnly=new CheckBox(this);photosOnly.setText("Yalnızca fotoğraflar");photosOnly.setTextSize(13);photosOnly.setTextColor(INK);
-        options.addView(photosOnly,new LinearLayout.LayoutParams(0,-2,1));
-        TextView help=text("Nasıl eşleşir?",12,TEAL);options.addView(help);
-        help.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Eşleşme seçenekleri")
-            .setMessage("Aynı boyut: adından bağımsız olarak tam bayt sayısı aynı dosyalar.\n\nAynı isim: hem isim hem tam boyut aynı.\n\nFarklı isim: boyut aynı, grupta farklı isimler var.\n\nAynı KB aralığı: boyut / 1024 aynı tam sayıya denk gelir. Örneğin 2048 ve 2050 bayt birlikte görünür.\n\nAynı boyut aynı içerik anlamına gelmez. Fotoğrafa dokunarak kontrol et. Boş dosyalar eşleştirilmez.")
-            .setPositiveButton("Tamam",null).show());
-        root.addView(options);
-        notice=text("Aynı boyut, aynı fotoğraf demek değildir. Önizlemeyi kontrol et.",11,MUTED);
+        notice=text("Aynı içerikteki fotoğraf, video ve diğer dosyalar.",12,MUTED);
         root.addView(notice);
-        LinearLayout bulk=row();autoButton=button("Birini bırak, kalanları seç",bulk,0xffE5F2EF,TEAL);
-        clearButton=button("Temizle",bulk,Color.WHITE,MUTED);add(root,bulk,4);
+        LinearLayout bulk=row();autoButton=button("Bir kopya kalsın",bulk,0xffE5F2EF,TEAL);
+        clearButton=button("Seçimi temizle",bulk,Color.WHITE,MUTED);add(root,bulk,4);
         autoButton.setOnClickListener(v->{
             selected.clear();selected.addAll(MatchRules.selectExtras(groups,protectedIds));
             adapter.notifyDataSetChanged();updateSelection();
@@ -126,7 +119,6 @@ public class MainActivity extends Activity {
         selectionLabel=text("Seçilen dosya yok",13,INK);root.addView(selectionLabel);
         LinearLayout footer=row();deleteButton=button("Seçilenleri sil",footer,0xffB83A42,Color.WHITE);root.addView(footer);
         deleteButton.setOnClickListener(v->confirmDelete());
-        photosOnly.setOnCheckedChangeListener((v,checked)->rebuild());
         matchMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
             public void onItemSelected(AdapterView<?> p,View v,int position,long id){rebuild();}
             public void onNothingSelected(AdapterView<?> p){}
@@ -198,7 +190,7 @@ public class MainActivity extends Activity {
                     catch(SecurityException ignored){}
                 }
                 saveTrees();updateScope();
-                if("folders".equals(lastScope)){files.clear();rebuild();summary.setText("Klasör listesi değişti. Yeniden tara.");}
+                if("folders".equals(lastScope)){files.clear();analysis=new CleanupAnalyzer.Result();updateCategories();rebuild();summary.setText("Klasör listesi değişti. Yeniden tara.");}
             }).show();
     }
 
@@ -228,6 +220,7 @@ public class MainActivity extends Activity {
     }
     private void beginScan(boolean phone) {
         cancelled.set(false);selected.clear();files.clear();scannedCount=emptyCount=unreadableCount=0;
+        analysis=new CleanupAnalyzer.Result();analysisProgressAt=0;updateCategories();
         setBusy(true,false);rebuild();updateScope();summary.setText("Dosyalar sayılıyor…");
         final List<String> folderUris=new ArrayList<>(trees);
         final List<File> roots=storageRoots();
@@ -235,11 +228,16 @@ public class MainActivity extends Activity {
             List<FileRecord> found=new ArrayList<>();Set<String> seen=new HashSet<>();
             if(phone)scanStorage(roots,found,seen);
             else for(String uri:folderUris){if(cancelled.get())break;scanTree(Uri.parse(uri),found,seen);}
+            CleanupAnalyzer.Result analysed=CleanupAnalyzer.analyze(found,new CleanupAnalyzer.Source(){
+                public InputStream open(FileRecord file)throws Exception{return stream(file);}
+                public boolean unchanged(FileRecord file)throws Exception{return MainActivity.this.unchanged(file);}
+                public CleanupAnalyzer.Photo photo(FileRecord file){return photoSignature(file);}
+            },()->cancelled.get()||Thread.currentThread().isInterrupted(),this::reportAnalysisProgress,System.currentTimeMillis());
             runOnUiThread(()->{
                 if(isDestroyed())return;
-                files.addAll(found);
+                analysis=analysed;files.addAll(found);
                 for(FileRecord e:files)if(protectedIds.contains(e.uri))protectedIds.add(e.id);
-                saveProtected();setBusy(false,false);rebuild();
+                saveProtected();setBusy(false,false);updateCategories();rebuild();
             });
         });
     }
@@ -259,7 +257,7 @@ public class MainActivity extends Activity {
                     }else if(file.isFile()){
                         scannedCount++;
                         long size=file.length();
-                        if(size==0){emptyCount++;continue;}
+                        if(size==0)emptyCount++;
                         String canonical=file.getCanonicalPath(),id="file:"+canonical;
                         if(seen.add(id))found.add(new FileRecord(id,Uri.fromFile(file).toString(),canonical,file.getName(),canonical,mime(file.getName()),size,file.lastModified(),file.canWrite()&&dir.canWrite()));
                         reportProgress();
@@ -284,7 +282,7 @@ public class MainActivity extends Activity {
                     if(DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)){queue.add(new String[]{id,path});continue;}
                     scannedCount++;
                     if(cursor.isNull(3)){unreadableCount++;continue;}
-                    long size=cursor.getLong(3);if(size<=0){emptyCount++;continue;}
+                    long size=cursor.getLong(3);if(size<0){unreadableCount++;continue;}if(size==0)emptyCount++;
                     Uri uri=DocumentsContract.buildDocumentUriUsingTree(tree,id);
                     String identity=documentIdentity(tree,id,uri);
                     if(seen.add(identity))found.add(new FileRecord(identity,uri.toString(),null,name,path,mime,size,cursor.getLong(5),(cursor.getLong(4)&DocumentsContract.Document.FLAG_SUPPORTS_DELETE)!=0));
@@ -310,27 +308,68 @@ public class MainActivity extends Activity {
         runOnUiThread(()->{if(!isDestroyed()&&busy&&!deleting)summary.setText(count+" dosya tarandı…");});
     }
 
+    private boolean keepsCopy(){return matchMode.getSelectedItemPosition()<2;}
+    private String[] categoryLabels(){
+        return new String[]{
+            "Birebir kopyalar · "+analysis.duplicates.size()+" grup",
+            "Benzer fotoğraflar · "+analysis.similar.size()+" grup",
+            "Eski dosyalar (6 ay) · "+analysis.old.size(),
+            "Geçici / boş dosyalar · "+analysis.junk.size(),
+            "Büyük dosyalar (100 MB+) · "+analysis.large.size()
+        };
+    }
+    private void updateCategories(){
+        int position=Math.max(0,matchMode.getSelectedItemPosition());
+        matchMode.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,categoryLabels()));
+        matchMode.setSelection(position);
+    }
+    private void reportAnalysisProgress(String phase,int done,int total){
+        long now=SystemClock.elapsedRealtime();
+        if(now-analysisProgressAt<250&&done!=total)return;
+        analysisProgressAt=now;
+        runOnUiThread(()->{if(!isDestroyed()&&busy&&!deleting)summary.setText(phase+"… "+done+" / "+total);});
+    }
     private void rebuild(){
         if(adapter==null)return;
-        selected.clear();
-        groups=MatchRules.groups(files,matchMode.getSelectedItemPosition(),photosOnly.isChecked());
+        selected.clear();int category=matchMode.getSelectedItemPosition();
+        if(category==0)groups=new ArrayList<>(analysis.duplicates);
+        else if(category==1)groups=new ArrayList<>(analysis.similar);
+        else{
+            List<FileRecord> candidates=category==2?analysis.old:category==3?analysis.junk:analysis.large;
+            groups=new ArrayList<>();
+            for(FileRecord file:candidates)groups.add(Collections.singletonList(file));
+        }
         rows.clear();int number=0;
         for(List<FileRecord> group:groups){
-            number++;rows.add(new Row(group,null,number));
-            for(FileRecord e:group)rows.add(new Row(group,e,number));
+            number++;if(category<2)rows.add(new Row(group,null,number));
+            for(FileRecord file:group)rows.add(new Row(group,file,number));
         }
+        autoButton.setVisibility(category<2?View.VISIBLE:View.GONE);
+        String[] notes={
+            "İçeriği birebir aynı olan dosyalar. Her grupta bir kopya kalır.",
+            "Görüntü benzerliği tahminidir; farklı kareler olabilir. Önizlemeyi kontrol et.",
+            "Son değişikliği 6 aydan eski. Eski olması gereksiz olduğu anlamına gelmez.",
+            "En az 2 gündür değişmeyen geçici veya boş dosya adayları. Silmeden kontrol et.",
+            "En az 100 MB alan kaplayan dosyalar. İhtiyacın olmayanları tek tek seç."
+        };
+        notice.setText(notes[Math.max(0,category)]);
         adapter.notifyDataSetChanged();updateSelection();
-        notice.setText(matchMode.getSelectedItemPosition()==MatchRules.SAME_KB
-            ?"Yaklaşık eşleşme: aynı 1 KB aralığı. İçerikler farklı olabilir."
-            :"Aynı boyut, aynı fotoğraf demek değildir. Önizlemeyi kontrol et.");
         if(!busy){
-            int matches=0;for(List<FileRecord> group:groups)matches+=group.size();
-            summary.setText((cancelled.get()?"Durduruldu · ":"")+scannedCount+" dosya · "+groups.size()+" grup / "+matches+" eşleşme"
-                +(emptyCount>0?" · "+emptyCount+" boş dosya atlandı":"")
-                +(unreadableCount>0?"\n"+unreadableCount+" alan/dosya okunamadı veya Android tarafından kısıtlandı.":""));
-            if(files.isEmpty()&&scannedCount==0&&unreadableCount==0)summary.setText("Telefonu tara veya birden fazla klasör ekle.");
-            if(!files.isEmpty()&&groups.isEmpty())summary.append("\nBu filtrede eşleşme yok. Diğer eşleşme seçeneklerini deneyebilirsin.");
+            int matches=0,photos=0,videos=0;for(List<FileRecord> group:groups)matches+=group.size();
+            for(FileRecord file:files){if(MatchRules.isPhoto(file))photos++;else if(isVideo(file))videos++;}
+            summary.setText((cancelled.get()?"Tarama durduruldu · ":"")+files.size()+" dosya · "+photos+" fotoğraf · "+videos+" video\n"
+                +matches+" sonuç"+(category<2?" / "+groups.size()+" grup":"")
+                +(unreadableCount>0?" · "+unreadableCount+" kısıtlı/okunamayan alan":"")
+                +(analysis.failedReads>0?"\n"+analysis.failedReads+" dosya içeriği okunamadı veya değişti.":""));
+            if(files.isEmpty()&&unreadableCount==0)summary.setText("Telefonu tara veya klasör ekle.");
+            if(!files.isEmpty()&&groups.isEmpty())summary.append("\nBu kategoride sonuç yok. Diğer kategorilere bakabilirsin.");
         }
+    }
+    private void removeAnalysedFiles(Set<String> ids){
+        for(List<FileRecord> group:analysis.duplicates)group.removeIf(f->ids.contains(f.id));
+        for(List<FileRecord> group:analysis.similar)group.removeIf(f->ids.contains(f.id));
+        analysis.duplicates.removeIf(g->g.size()<2);analysis.similar.removeIf(g->g.size()<2);
+        analysis.old.removeIf(f->ids.contains(f.id));analysis.junk.removeIf(f->ids.contains(f.id));analysis.large.removeIf(f->ids.contains(f.id));
     }
 
     private void updateScope(){
@@ -346,7 +385,7 @@ public class MainActivity extends Activity {
         busy=value;deleting=isDeleting;
         phoneButton.setText(value&&!isDeleting?"Taramayı durdur":"Telefonu tara");
         phoneButton.setEnabled(!isDeleting);folderButton.setEnabled(!value);foldersLink.setEnabled(!value);
-        foldersScan.setEnabled(!value&&!trees.isEmpty());matchMode.setEnabled(!value);photosOnly.setEnabled(!value);
+        foldersScan.setEnabled(!value&&!trees.isEmpty());matchMode.setEnabled(!value);
         autoButton.setEnabled(!value);clearButton.setEnabled(!value);progress.setVisibility(value?View.VISIBLE:View.GONE);
         updateSelection();if(adapter!=null)adapter.notifyDataSetChanged();
     }
@@ -361,13 +400,14 @@ public class MainActivity extends Activity {
 
     private void confirmDelete(){
         if(busy||selected.isEmpty())return;
-        for(List<FileRecord> group:groups)if(!MatchRules.leavesOne(group,selected)){toast("Her grupta en az bir dosya kalmalı.");return;}
+        for(List<FileRecord> group:groups)if(keepsCopy()&&!MatchRules.leavesOne(group,selected)){toast("Her grupta en az bir dosya kalmalı.");return;}
         List<FileRecord> targets=new ArrayList<>();int protectedCount=0;StringBuilder names=new StringBuilder();
         for(FileRecord e:files)if(selected.contains(e.id)){
             targets.add(e);if(protectedIds.contains(e.id))protectedCount++;
             names.append("• ").append(e.path).append("\n");
         }
         TextView message=text(targets.size()+" dosya kalıcı olarak silinecek. Geri alma yok."
+            +(matchMode.getSelectedItemPosition()==1?"\n\nBenzer fotoğraflar farklı kareler olabilir. Önizlemeleri kontrol ettiğinden emin ol.":"")
             +(protectedCount>0?"\n\n“Silme” işaretli "+protectedCount+" dosyayı elle seçtin. Bunlar da silinecek.":"")
             +"\n\n"+names,14,INK);message.setPadding(dp(20),dp(12),dp(20),dp(12));
         ScrollView scroll=new ScrollView(this);scroll.addView(message);
@@ -387,8 +427,8 @@ public class MainActivity extends Activity {
                     final int skipped=changed;
                     runOnUiThread(()->{
                         if(isDestroyed())return;
-                        files.removeIf(e->deleted.contains(e.id));protectedIds.removeAll(deleted);saveProtected();
-                        setBusy(false,false);rebuild();
+                        files.removeIf(e->deleted.contains(e.id));removeAnalysedFiles(deleted);protectedIds.removeAll(deleted);saveProtected();
+                        setBusy(false,false);updateCategories();rebuild();
                         summary.setText(deleted.size()+" dosya silindi · "+(targets.size()-deleted.size())+" silinmedi"
                             +(skipped>0?"\n"+skipped+" dosya taramadan sonra değiştiği için korunarak atlandı.":""));
                     });
@@ -418,8 +458,8 @@ public class MainActivity extends Activity {
             if(item.file==null){
                 TextView header=convert instanceof TextView?(TextView)convert:text("",13,TEAL);
                 header.setTypeface(null,Typeface.BOLD);header.setPadding(dp(10),dp(16),dp(8),dp(8));
-                header.setText("GRUP "+item.number+"   ·   "+item.group.size()+" dosya   ·   "
-                    +(matchMode.getSelectedItemPosition()==MatchRules.SAME_KB?item.group.get(0).size/1024+" KB aralığı":size(item.group.get(0).size)));
+                long bytes=0;for(FileRecord f:item.group)bytes+=f.size;
+                header.setText((matchMode.getSelectedItemPosition()==0?"KOPYA GRUBU ":"BENZER GRUBU ")+item.number+" · "+item.group.size()+" dosya · "+size(bytes));
                 return header;
             }
             Holder h;
@@ -440,12 +480,12 @@ public class MainActivity extends Activity {
                 LinearLayout wrapper=column();wrapper.setPadding(0,0,0,dp(4));wrapper.addView(card);wrapper.setTag(h);convert=wrapper;
             }else h=(Holder)convert.getTag();
             final Holder holder=h;FileRecord e=item.file;
-            h.name.setText(e.name);h.path.setText(e.path);h.size.setText(size(e.size)+" · "+e.size+" bayt"+(e.deletable?"":" · Salt okunur"));
+            h.name.setText(e.name);h.path.setText(e.path);h.size.setText(size(e.size)+(isVideo(e)?" · Video":"")+(e.deletable?"":" · Salt okunur"));
             h.select.setOnCheckedChangeListener(null);h.select.setChecked(selected.contains(e.id));h.select.setEnabled(!busy&&e.deletable);
             h.select.setOnCheckedChangeListener((v,checked)->{
                 if(checked){
                     selected.add(e.id);
-                    if(!MatchRules.leavesOne(item.group,selected)){selected.remove(e.id);holder.select.setChecked(false);toast("Bu grupta bir dosya bırak.");return;}
+                    if(keepsCopy()&&!MatchRules.leavesOne(item.group,selected)){selected.remove(e.id);holder.select.setChecked(false);toast("Bu grupta bir dosya bırak.");return;}
                 }else selected.remove(e.id);
                 updateSelection();
             });
@@ -462,16 +502,17 @@ public class MainActivity extends Activity {
     }
     private static final class Holder {CheckBox select,protect;ImageView image;TextView name,path,size;Button open;}
     private void loadThumbnail(FileRecord file,ImageView image){
-        image.setTag(file.id);image.setImageDrawable(null);
-        if(!MatchRules.isPhoto(file)){image.setImageResource(android.R.drawable.ic_menu_save);return;}
-        Bitmap cached=thumbs.get(file.id);
+        String key=file.id+":"+file.size+":"+file.modified;
+        image.setTag(key);image.setImageDrawable(null);
+        if(!MatchRules.isPhoto(file)){image.setImageResource(isVideo(file)?android.R.drawable.ic_media_play:android.R.drawable.ic_menu_save);return;}
+        Bitmap cached=thumbs.get(key);
         if(cached!=null){image.setImageBitmap(cached);return;}
         image.setImageResource(android.R.drawable.ic_menu_gallery);
         images.execute(()->{
             Bitmap bitmap=decode(file,dp(80));
             if(bitmap!=null){
-                thumbs.put(file.id,bitmap);
-                runOnUiThread(()->{if(!isDestroyed()&&file.id.equals(image.getTag()))image.setImageBitmap(bitmap);});
+                thumbs.put(key,bitmap);
+                runOnUiThread(()->{if(!isDestroyed()&&key.equals(image.getTag()))image.setImageBitmap(bitmap);});
             }
         });
     }
@@ -484,9 +525,43 @@ public class MainActivity extends Activity {
             try(InputStream in=stream(file)){BitmapFactory.decodeStream(in,null,options);}
             int sample=1;while(options.outWidth/sample>target*2||options.outHeight/sample>target*2)sample*=2;
             options.inJustDecodeBounds=false;options.inSampleSize=sample;
-            try(InputStream in=stream(file)){return BitmapFactory.decodeStream(in,null,options);}
+            Bitmap bitmap;
+            try(InputStream in=stream(file)){bitmap=BitmapFactory.decodeStream(in,null,options);}
+            if(bitmap==null)return null;
+            int orientation=1;
+            try(InputStream in=stream(file)){orientation=new android.media.ExifInterface(in).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,1);}
+            catch(Exception ignored){}
+            Matrix transform=new Matrix();
+            switch(orientation){
+                case 2:transform.setScale(-1,1);break;
+                case 3:transform.setRotate(180);break;
+                case 4:transform.setScale(1,-1);break;
+                case 5:transform.setRotate(90);transform.postScale(-1,1);break;
+                case 6:transform.setRotate(90);break;
+                case 7:transform.setRotate(270);transform.postScale(-1,1);break;
+                case 8:transform.setRotate(270);break;
+                default:return bitmap;
+            }
+            Bitmap oriented=Bitmap.createBitmap(bitmap,0,0,bitmap.getWidth(),bitmap.getHeight(),transform,true);
+            if(oriented!=bitmap)bitmap.recycle();
+            return oriented;
         }catch(Exception|OutOfMemoryError e){return null;}
     }
+    private CleanupAnalyzer.Photo photoSignature(FileRecord file){
+        Bitmap bitmap=decode(file,72);
+        if(bitmap==null)return null;
+        Bitmap nine=Bitmap.createScaledBitmap(bitmap,9,8,true),eight=Bitmap.createScaledBitmap(bitmap,8,8,true);
+        int[] grid9=new int[72],grid8=new int[64];
+        nine.getPixels(grid9,0,9,0,0,9,8);eight.getPixels(grid8,0,8,0,0,8,8);
+        CleanupAnalyzer.Photo signature=CleanupAnalyzer.fingerprint(grid9,grid8,(double)bitmap.getWidth()/bitmap.getHeight());
+        if(nine!=bitmap)nine.recycle();if(eight!=bitmap&&eight!=nine)eight.recycle();bitmap.recycle();
+        return signature;
+    }
+    private boolean isVideo(FileRecord file){
+        if(file.mime!=null&&file.mime.startsWith("video/"))return true;
+        return file.name.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|mkv|mov|avi|webm|3gp|m4v)$");
+    }
+
     private void open(FileRecord file){
         if(MatchRules.isPhoto(file)){
             ImageView image=new ImageView(this);image.setAdjustViewBounds(true);image.setScaleType(ImageView.ScaleType.FIT_CENTER);
