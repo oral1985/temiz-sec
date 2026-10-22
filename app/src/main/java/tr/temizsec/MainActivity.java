@@ -4,7 +4,6 @@ import android.Manifest;
 import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
-import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
@@ -35,6 +34,7 @@ public class MainActivity extends Activity {
     private Set<String> protectedIds, trees;
     private SharedPreferences prefs;
     private TextView scopeLabel, summary, selectionLabel, notice, foldersLink;
+    private LinearLayout folderActions;
     private Button phoneButton, folderButton, foldersScan, autoButton, clearButton, deleteButton;
     private Spinner matchMode;
     private CheckBox photosOnly;
@@ -87,7 +87,7 @@ public class MainActivity extends Activity {
             requestPhoneScan();
         });
         folderButton.setOnClickListener(v->chooseFolder());
-        LinearLayout folderActions=row();scope.addView(folderActions);
+        folderActions=row();scope.addView(folderActions);
         foldersLink=text("",12,TEAL);foldersLink.setPadding(dp(4),dp(8),dp(4),dp(8));
         folderActions.addView(foldersLink,new LinearLayout.LayoutParams(0,-2,1));
         foldersLink.setOnClickListener(v->manageFolders());
@@ -336,9 +336,10 @@ public class MainActivity extends Activity {
     private void updateScope(){
         if(scopeLabel==null)return;
         scopeLabel.setText("phone".equals(lastScope)
-            ?"Kapsam: telefon + erişilebilen SD kart · tüm alt klasörler"
+            ?"Telefon + erişilebilen SD kart · tüm alt klasörler"
             :"Kapsam: "+trees.size()+" seçili klasör · tüm alt klasörler");
         foldersLink.setText("Klasörlerim ("+trees.size()+")  ›");
+        folderActions.setVisibility(trees.isEmpty()?View.GONE:View.VISIBLE);
         foldersScan.setEnabled(!busy&&!trees.isEmpty());
     }
     private void setBusy(boolean value,boolean isDeleting){
@@ -376,6 +377,7 @@ public class MainActivity extends Activity {
                 worker.execute(()->{
                     Set<String> deleted=new HashSet<>();int changed=0;
                     for(FileRecord e:targets){
+                        if(Thread.currentThread().isInterrupted())break;
                         try{
                             if(!unchanged(e)){changed++;continue;}
                             boolean success=e.filePath!=null?new File(e.filePath).delete():DocumentsContract.deleteDocument(getContentResolver(),Uri.parse(e.uri));
