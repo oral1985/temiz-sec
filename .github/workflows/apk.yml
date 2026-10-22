@@ -1,0 +1,37 @@
+name: APK oluştur
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: APK derle ve denetimleri çalıştır
+        run: gradle --no-daemon assembleDebug lintDebug
+      - name: APK imzasını doğrula
+        shell: bash
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk Temiz-Sec.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose Temiz-Sec.apk
+          sha256sum Temiz-Sec.apk > Temiz-Sec.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Temiz-Sec-APK
+          path: |
+            Temiz-Sec.apk
+            Temiz-Sec.apk.sha256
+          if-no-files-found: error
+          retention-days: 90
