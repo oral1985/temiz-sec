@@ -19,11 +19,16 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
           log-accepted-android-sdk-licenses: 'false'
+      - name: Sonraki sürümlerde aynı kurulum imzasını koru
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: temiz-sec-debug-signing-v2
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
       - name: APK derle ve denetimleri çalıştır
-        run: gradle --no-daemon assembleDebug lintDebug
+        run: gradle --no-daemon testDebugUnitTest assembleDebug lintDebug
       - name: APK imzasını doğrula
         shell: bash
         run: |
@@ -53,8 +58,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload v1.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+          if gh release view v2.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v2.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create v1.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Temiz Seç 1.0" --notes "Android 8 ve üzeri için ilk sürüm. Aynı isim ve boyuta göre gruplama, farklı isimlerde aynı boyut filtresi, toplu ve tek tek seçim, kalıcı silme koruması. Dosya silme kalıcıdır. Fiziksel cihaz testi henüz yapılmadı."
+            gh release create v2.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Temiz Seç 2.0" --notes "Android 8 ve üzeri. Ortak depolama ve SD kart taraması, çoklu klasör, fotoğraf önizlemesi ve aynı KB aralığı seçeneği. Kalıcı silme işaretleri toplu seçimde korunur. Boş dosyalar atlanır. Silme kalıcıdır. Android özel uygulama klasörleri kapsam dışıdır. 1.0 sürümü ile imza değiştiği için eski sürümü kaldırmak gerekebilir; bu işlem eski işaretleri sıfırlar. Fiziksel cihaz testi henüz yapılmadı."
           fi
