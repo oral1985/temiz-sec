@@ -38,3 +38,23 @@ jobs:
             Temiz-Sec.apk.sha256
           if-no-files-found: error
           retention-days: 90
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Temiz-Sec-APK
+      - name: Doğrudan APK indirme bağlantısını yayınla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v1.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create v1.0.0 Temiz-Sec.apk Temiz-Sec.apk.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Temiz Seç 1.0" --notes "Android 8 ve üzeri için ilk sürüm. Aynı isim ve boyuta göre gruplama, farklı isimlerde aynı boyut filtresi, toplu ve tek tek seçim, kalıcı silme koruması. Dosya silme kalıcıdır. Fiziksel cihaz testi henüz yapılmadı."
+          fi

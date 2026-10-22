@@ -94,8 +94,14 @@ public class MainActivity extends Activity {
         super.onActivityResult(request,result,data);
         if(request!=10 || result!=RESULT_OK || data==null || data.getData()==null) return;
         Uri next=data.getData();
-        int flags=data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        try { getContentResolver().takePersistableUriPermission(next,flags); }
+        try {
+            if((data.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION)!=0) {
+                getContentResolver().takePersistableUriPermission(next,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } else {
+                getContentResolver().takePersistableUriPermission(next,Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            }
+        }
         catch(SecurityException e){ toast("Kalıcı klasör izni alınamadı. Başka bir klasör seç."); return; }
         Uri previous=tree; tree=next; prefs.edit().putString("tree",tree.toString()).apply();
         if(previous!=null && !previous.equals(next)) {
